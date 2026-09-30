@@ -1,0 +1,56 @@
+name: RJTT Livery Watcher
+
+on:
+  schedule:
+    - cron: "3-59/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: rjtt-watcher
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run watcher
+        env:
+          GOOGLE_SHEET_CSV_URL: ${{ secrets.GOOGLE_SHEET_CSV_URL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          AERODATABOX_API_KEY: ${{ secrets.AERODATABOX_API_KEY }}
+        run: python watcher.py
+
+      - name: Save updated cache/state files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add icao24_cache.json notified.json pending_confirmation.json
+          if git diff --cached --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+          git commit -m "Update watcher state [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected, merging latest and retrying ($i/5)..."
+            git fetch origin main
+            git merge -X ours -m "Merge remote watcher state [skip ci]" origin/main
+          done
+          echo "Failed to push state after retries."
+          exit 1
